@@ -1,0 +1,50 @@
+import "../../../../zokrates_stdlib/stdlib/utils/casts/u32_to_field" as u32tf;
+import "../../../../zokrates_stdlib/stdlib/utils/casts/field_to_u64" as ftu64;
+
+def div(u64 a, u64 b) -> u64{
+    u64 minus = 9223372036854775807;
+    u64 result = if(a<=minus && b<=minus) {a/b}\
+                else { if(a>minus && b>minus) {(a*-1)/(b*-1)}\
+                else {if(a>minus && b<=minus) {((a*-1)/b)*-1}\
+                else { if(a<=minus && b>minus) {(a/(b*-1))*-1}\
+                else {0} } } };
+    return result;
+}
+
+def GD(u64[90][3] x, u64[90] y, u64[3] mut theta) -> u64[3] {
+    u64 E = 10000000;
+    u32 m = 90;
+    u64 alpha = 100000;
+    u64 mut sum = 0;
+    u64[90] mut result_a = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    u64[3] mut result_b = [0, 0, 0];
+
+    for u32 i in 0..90{
+        sum=0;
+        for u32 j in 0..3{
+            sum = sum + div(x[i][j]*theta[j], E);
+        }
+        result_a[i] = sum - y[i];
+    }
+    for u32 i in 0..3{
+        sum = 0;
+        for u32 j in 0..90{
+            sum = sum + div(x[j][i] * result_a[j], E);
+        }
+        result_b[i] = div(div(sum * alpha, ftu64(u32tf(m))), E);
+        theta[i] = theta[i] - result_b[i];
+    }
+    return theta;
+}
+
+def main(private u64[90][3] x, private u64[90] y, private u64[3] mut theta) -> (u64[3], u64[3]){
+    u64 E = 10000000;
+    u64[3] old_theta = theta;
+    for u32 iter in 0..5{
+        theta = GD(x, y, theta);
+    }
+    return(old_theta, theta);
+}
+
+
+

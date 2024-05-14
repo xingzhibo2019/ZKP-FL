@@ -1,0 +1,183 @@
+import "../../../../zokrates_stdlib/stdlib/utils/casts/u32_to_field" as u32tf;
+import "../../../../zokrates_stdlib/stdlib/utils/casts/field_to_u64" as ftu64;
+
+struct Input {
+    u64[10][4] w;
+    u64[3][10] v;
+    u64[10][4] dw;
+    u64[3][10] dv;
+}
+
+struct Output {
+    u64[10] o;
+    u64[3] OutputData;
+}
+
+
+def div(u64 a, u64 b) -> u64{
+    u64 minus = 9223372036854775807;
+    u64 result = if(a<=minus && b<=minus) {a/b}\
+                else { if(a>minus && b>minus) {(a*-1)/(b*-1)}\
+                else {if(a>minus && b<=minus) {((a*-1)/b)*-1}\
+                else { if(a<=minus && b>minus) {(a/(b*-1))*-1}\
+                else {0} } } };
+    return result;
+}
+
+def pow(u64 a, u32 b) -> u64{
+    u64 E9 = 10000000;
+    u64 mut result = 1 * E9;
+    for u32 i in 0..b{
+        result = div(result*a, E9);
+    }
+    return result;
+}
+    
+
+// def div(u64 a, u64 b) -> u64:
+//     u64 minus = 9223372036854775807
+//     u64 result = if (a<=minus && b<=minus) then a/b else\
+//         (if (a>minus && b>minus) then (a*-1)/(b*-1) else\
+//         (if (a>minus && b<=minus) then ((a*-1)/b)*-1 else\
+//         (if (a<=minus && b>minus) then (a/(b*-1))*-1 else 0 fi) fi) fi) fi
+//     return result
+
+// def pow(u64 a, u32 b) -> u64:
+//     u64 E9 = 10000000
+//     u64 result = 1 * E9
+//     for u32 i in 0..b do
+//         result = div(result * a, E9)
+//     endfor
+//     return result
+
+def activation(u64 x) -> u64{
+    u64 E9 = 10000000;
+    u64 msum = (-1 * x);
+    u64 mut taylor = (1 * E9 + msum);
+    u64 mut n = 1 * E9;
+    for u32 m in 2..6{
+        n = n * ftu64(u32tf(m));
+        taylor = taylor + div(pow(msum, m)*E9, n);
+    }
+    return div(1*E9*E9, 1*E9+taylor);
+} 
+
+// def activation(u64 x) -> u64:
+//     u64 E9 = 10000000
+//     u64 msum = (-1 * x)
+//     u64 taylor = (1 * E9 + msum)
+//     u64 n = 1 * E9
+//     for u32 m in 2..6 do
+//         n = n * ftu64(u32tf(m))
+//         taylor = taylor + div(pow(msum, m)*E9 , n)
+//     endfor
+//     return div(1 * E9 * E9 , 1 * E9 + taylor)
+
+def computO(u64[4] d_in, Input input, Output mut output) -> Output {
+    u64 E9 = 10000000;
+    u64 mut sum = 0;
+    for u32 i in 0..10{
+        sum=0;
+        for u32 j in 0..4{
+            sum = sum + div((input.w[i][j] * d_in[j]), E9);
+            output.o[i] = activation(sum);
+        }
+    }
+    for u32 i in 0..3{
+        sum = 0;
+        for u32 j in 0..10{
+            sum = sum + div((input.v[i][j] * output.o[j]), E9);
+        }
+        output.OutputData[i] = sum;
+    }
+    return output;
+}
+
+// def computO(u64[4] d_in, Input input, Output output) -> (Output):
+//     u64 E9 = 10000000
+//     u64 sum = 0
+//     for u32 i in 0..10 do
+//         sum = 0
+//         for u32 j in 0..4 do
+//             sum = sum + div((input.w[i][j] * d_in[j]), E9)
+//             output.o[i] = activation(sum)
+//         endfor
+//     endfor
+//     for u32 i in 0..3 do
+//         sum = 0
+//         for u32 j in 0..10 do
+//             sum = sum + div((input.v[i][j] * output.o[j]), E9)
+//         endfor
+//         output.OutputData[i] = sum
+//     endfor
+//     return output
+
+def BackUpdate(u64[4] d_in, u64[3] d_out, Input mut input, Output output) -> Input{
+    u64 E9 = 10000000;
+    u64 mut t = 0;
+    u64 StudyRate_A = 200000;
+    u64 StudyRate_B = 400000;
+    u64 StudyRate_a = 200000;
+    u64 StudyRate_b = 300000;
+
+    for u32 i in 0..10{
+        t=0;
+        for u32 j in 0..3{
+            t = t + div(((output.OutputData[j] - d_out[j]) * input.v[j][i]), E9);
+            input.dv[j][i] = div((StudyRate_A * input.dv[j][i]), E9) + div((div(StudyRate_B * (output.OutputData[j] - d_out[j]), E9) * output.o[i]), E9);
+			// A * dv / E9 + B * (OutputData - d_out) / E9 * o / E9
+            input.v[j][i] = input.v[j][i] - input.dv[j][i];
+        }
+        for u32 j in0..4{
+            input.dw[i][j] = div((StudyRate_a * input.dw[i][j]), E9) + div(div(div(div(StudyRate_b * t, E9) * output.o[i], E9) * (1*E9 - output.o[i]), E9) * d_in[j], E9);
+			// a * dw / E9 + b * t / E9 * o / E9 * (E9 - o) / E9 * d_in / E9
+            input.w[i][j] = input.w[i][j] - input.dw[i][j];
+        }
+    }
+    return input;
+} 
+
+// def BackUpdate(u64[4] d_in, u64[3] d_out, Input input, Output output) -> (Input):
+//     u64 E9 = 10000000
+//     u64 t = 0
+//     u64 StudyRate_A = 200000
+//     u64 StudyRate_B = 400000
+//     u64 StudyRate_a = 200000
+//     u64 StudyRate_b = 300000
+//     for u32 i in 0..10 do
+//         t = 0
+//         for u32 j in 0..3 do
+//             t = t + div(((output.OutputData[j] - d_out[j]) * input.v[j][i]), E9)
+//             // t + (OutputData - d_out) * v / E9
+//             input.dv[j][i] = div((StudyRate_A * input.dv[j][i]), E9) + div((div(StudyRate_B * (output.OutputData[j] - d_out[j]), E9) * output.o[i]), E9)
+// 			// A * dv / E9 + B * (OutputData - d_out) / E9 * o / E9
+//             input.v[j][i] = input.v[j][i] - input.dv[j][i]
+//         endfor
+//         for u32 j in 0..4 do
+//             input.dw[i][j] = div((StudyRate_a * input.dw[i][j]), E9) + div(div(div(div(StudyRate_b * t, E9) * output.o[i], E9) * (1*E9 - output.o[i]), E9) * d_in[j], E9)
+// 			// a * dw / E9 + b * t / E9 * o / E9 * (E9 - o) / E9 * d_in / E9
+//             input.w[i][j] = input.w[i][j] - input.dw[i][j]
+//         endfor
+//     endfor
+//     return input
+
+def main(private u64[4] d_in, private u64[3] d_out, private Input mut input, private Output mut output) -> (Input, Output, Input, Output){
+    u64 E9 = 10000000;
+    Input oldinput = input;
+    Output oldoutput = output;
+    for u32 t in 0..1{
+        output = computO(d_in, input, output);
+        input = BackUpdate(d_in, d_out, input, output);
+    }
+    return (oldinput, oldoutput, input, output);
+} 
+
+// def main(private u64[4] d_in, private u64[3] d_out, private Input input, private Output output) -> (Input, Output, Input, Output):
+//     u64 E9 = 10000000
+//     Input oldinput = input
+//     Output oldoutput = output
+//     for u32 t in 0..1 do
+//         output = computO(d_in, input, output)
+//         input = BackUpdate(d_in, d_out, input, output)
+//     endfor
+//     return oldinput, oldoutput, input, output
