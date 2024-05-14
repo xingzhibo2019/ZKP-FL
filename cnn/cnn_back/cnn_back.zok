@@ -1,0 +1,106 @@
+
+const u32 N_TEST_EXAMPLES = 10;
+const u32 N_IMAGE = 28;
+const u64 EXTD_INPUT = 1000000;//10^6
+const u64 EXTD_KERNEL = 1000000;//10^6
+//const u64 EXTD_GRAD = 10000;//10^6
+const u64 EXTD_LOSS = 1000000;//10^6
+const u64 EXTD_WEIGHT = 1000000;//10^6
+const u64 extd = 1000000;
+const u32 NODE_NUM = 10;//输出节点个数，即预测的可能结果数量
+const u32 FILTER_NUM = 2;
+const u32 INPUT_LEN = 13*13*FILTER_NUM;//13*13*FILTER_NUM
+const u32 KER_SIZE = 3;
+const u32 POOL_SIZE = 2;
+
+
+struct Relu_For_Out {
+    u64[NODE_NUM] total;
+    u64[NODE_NUM] output;
+    u64[INPUT_LEN] input_flat;
+}
+
+struct Relu_Back_Out {
+    u64[13][13][FILTER_NUM] output;
+    u64[INPUT_LEN][NODE_NUM] weights;
+    u64[NODE_NUM] biases;
+}
+
+def div(u64 a, u64 b) -> u64{
+    u64 minus = 9223372036854775807;
+    u64 result = if(a<=minus && b<=minus) {a/b}\
+                else { if(a>minus && b>minus) {(a*-1)/(b*-1)}\
+                else {if(a>minus && b<=minus) {((a*-1)/b)*-1}\
+                else { if(a<=minus && b>minus) {(a/(b*-1))*-1}\
+                else {0} } } };
+    return result;
+}
+
+
+def e(u64 x) -> u64{
+    u64 ex = extd + x + div(div(x*x,extd),2) + div(div(((div(x*x,extd))*x),extd),6);
+    return ex;
+}
+
+
+
+//d_out_d_t忽略，d_L_d_out扩大，d_t_d_w扩大，d_t_d_out扩大
+//如果直接相乘，dL_dw和dL_dinput扩大两次，所以要除以一次extd
+//返回dL_dinput，weight和bias，后两者用于更新weights和biases
+def relu_backprop(u64[NODE_NUM] d_L_d_out, u64[NODE_NUM] total) -> u64[NODE_NUM] {
+    //Relu_Back_Out mut out = Relu_Back_Out{output: [[[0; FILTER_NUM]; 13]; 13], weights: weights, biases: biases };
+    u64[NODE_NUM] mut total_exp = [0;NODE_NUM];
+    //选出唯一一个不为0的grad
+    //u64 mut grad = 0;
+    u32 mut idx = 0;
+    for u32 i in 0..NODE_NUM {
+        //grad = if(d_L_d_out[i] != 0) {d_L_d_out[i]} else {grad};
+        idx = if(d_L_d_out[i] != 0) {i} else {idx};
+    }
+    //grad = e(grad);
+
+
+    //链式法则计算
+    u64[NODE_NUM] mut d_out_d_t = [0; NODE_NUM];
+    u64 mut total_sum=0;
+    for u32 i in 0..NODE_NUM{
+        total_exp[i] = e(total[i]);
+        total_sum = total_sum + total_exp[i];
+    }
+
+    for u32 i in 0..NODE_NUM{
+        d_out_d_t[i] = div(div(total_exp[i],div(total_sum,extd))*total_exp[idx],total_sum)*(-1);
+    }
+    d_out_d_t[idx] = div(div(total_sum-total_exp[idx],div(total_sum,extd))*total_exp[idx],total_sum);
+
+
+
+    u64[NODE_NUM] mut d_L_d_t = [0; NODE_NUM];
+    //grad是一个数，代表了某个下标的d_L_d_t的值，d_out_d_t为一个数组，表示不同类的梯度值
+            //为什么将某个下标的值和其他所有下标的相乘？
+    for u32 i in 0..NODE_NUM {
+        d_L_d_t[i] = div(d_L_d_out[idx]*d_out_d_t[i],extd);
+    }
+
+
+    return d_L_d_t;
+}
+
+
+def main(private u64[NODE_NUM] total,private u64[INPUT_LEN] input_flat,private u64[NODE_NUM] d_L_d_out) -> u64[NODE_NUM] {
+
+    u64[FILTER_NUM][3][3] mut conv_kernel = [[[50000;3];3];FILTER_NUM];//扩大
+    u64[26][26][FILTER_NUM] mut conv_output = [[[0; FILTER_NUM]; 26]; 26];
+    //Relu_Back_Out mut relu_back_out = Relu_Back_Out{output: [[[0; FILTER_NUM]; 13]; 13], weights: [[50000; NODE_NUM]; INPUT_LEN], biases: [50000; NODE_NUM] };
+    //u64 lr = 1000;
+        //反向传播
+
+
+    u64[NODE_NUM] mut full_back1 = relu_backprop(d_L_d_out, total);
+        //relu_d_L_d_out, weights, biases = relu_backprop(d_L_d_out, relu_for_out.total, weights, biases, relu_for_out.input_flat, lr);
+    //u64[26][26][FILTER_NUM] mut pool_d_L_d_input = pool_backprop(relu_back_out.output, conv_output, pool_output);
+    //conv_kernel = conv_backprop(pool_d_L_d_input, conv_kernel, train_examples, lr);
+
+
+    return full_back1;
+}

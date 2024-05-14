@@ -1,0 +1,153 @@
+const u32 N_TEST_EXAMPLES = 1;
+const u32 N_IMAGE = 28;
+const u64 EXTD_INPUT = 1000000;//10^6
+const u64 EXTD_KERNEL = 1000000;//10^6
+//const u64 EXTD_GRAD = 10000;//10^6
+const u64 EXTD_LOSS = 1000000;//10^6
+const u64 EXTD_WEIGHT = 1000000;//10^6
+const u64 extd = 1000000;
+const u32 NODE_NUM = 10;//输出节点个数，即预测的可能结果数量
+const u32 FILTER_NUM = 2;
+const u32 INPUT_LEN = 13*13*FILTER_NUM;//13*13*FILTER_NUM
+const u32 KER_SIZE = 3;
+const u32 POOL_SIZE = 2;
+
+struct Relu_For_Out {
+    u64[NODE_NUM] output;
+    u64[NODE_NUM] total;
+    u64[INPUT_LEN] input_flat;
+}
+
+struct Relu_Back_Out {
+    u64[13][13][FILTER_NUM] output;
+    u64[INPUT_LEN][NODE_NUM] weights;
+    u64[NODE_NUM] biases;
+}
+
+def div(u64 a, u64 b) -> u64{
+    u64 minus = 9223372036854775807;
+    u64 result = if(a<=minus && b<=minus) {a/b}\
+                else { if(a>minus && b>minus) {(a*-1)/(b*-1)}\
+                else {if(a>minus && b<=minus) {((a*-1)/b)*-1}\
+                else { if(a<=minus && b>minus) {(a/(b*-1))*-1}\
+                else {0} } } };
+    return result;
+}
+
+def log1(u64 x)->u64{
+    u64 logx= 3*x-11*extd/6-div(div(3*x*x,extd),2) +  div(div((div(x*x,extd)*x),extd),3);
+    return logx;
+
+}
+
+
+def e(u64 x) -> u64{
+    u64 ex = extd + x + div(div(x*x,extd),2) + div(div(((div(x*x,extd))*x),extd),6);
+    return ex;
+}
+
+//conv 3*3
+def conv_forward(u64[28][28] input, u64[FILTER_NUM][3][3] conv_kernel) -> u64[26][26][FILTER_NUM] {
+    u64[26][26][FILTER_NUM] mut output = [[[0; FILTER_NUM]; 26]; 26];
+    for u32 i in 0..26 {
+        for u32 j in 0..26 {
+            for u32 f in 0..FILTER_NUM {//遍历卷积层数
+                u64 mut sum = 0;
+                for u32 row in i..(i+3) {
+                    for u32 line in j..(j+3) {
+                        sum = sum + input[row][line] * conv_kernel[f][row - i][line - j];//kernel扩大了 input也扩大了
+                    }
+                }
+                output[i][j][f] = div(sum, EXTD_KERNEL);
+            }
+        }
+    }
+
+    return output;
+}
+
+
+//Pool 2*2
+def pool_forward(u64[26][26][FILTER_NUM] input) -> u64[13][13][FILTER_NUM] {
+    u64 h = 13;
+    u64 w = 13;
+    u64[13][13][FILTER_NUM] mut output = [[[0; FILTER_NUM]; 13]; 13];
+    for u32 i in 0..13 { 
+        for u32 j in 0..13 {
+            for u32 f in 0..FILTER_NUM {
+                u64 mut max = 0;
+                for u32 row in (i*2)..(i*2+2) {
+                    for u32 line in (j*2)..(j*2+2) {
+                        max = if (max < input[row][line][f]) { input[row][line][f] } else { max };
+                    }
+                }
+                output[i][j][f] = max;
+            }
+        }
+    }
+    return output;
+}
+
+def relu_forward(u64[INPUT_LEN][NODE_NUM] weights, u64[NODE_NUM] biases, u64[13][13][FILTER_NUM] input) -> Relu_For_Out {
+    
+    Relu_For_Out mut out = Relu_For_Out{ output: [0; NODE_NUM], total: [0; NODE_NUM], input_flat: [0; INPUT_LEN] };
+    //u64[NODE_NUM] mut output = [0; NODE_NUM];
+    //flatten
+    //u64[INPUT_LEN] mut input_flat = [0; INPUT_LEN];
+    u32 mut index = 0;
+    for u32 i in 0..13 {
+        for u32 j in 0..13 {
+            for u32 k in 0..FILTER_NUM {
+                out.input_flat[index] = input[i][j][k];
+                index = index + 1;
+            }
+        }
+    }
+    
+    //(1*INPUT_LEN) 点乘 (INPUT_LEN*NODE_NUM) + biases
+    //u64[NODE_NUM] mut total = [0; NODE_NUM];
+    for u32 i in 0..NODE_NUM { 
+        for u32 j in 0..INPUT_LEN {
+            out.total[i] = out.total[i] + div(out.input_flat[j] * weights[j][i], EXTD_WEIGHT);
+        }
+        out.total[i] = out.total[i] + biases[i];
+    }
+    u64 mut sum =0;
+    for u32 i in 0..NODE_NUM{
+        sum = sum + e(out.total[i]);
+    }
+    for u32 i in 0..NODE_NUM{
+        //out.output[i]=1;
+        out.output[i] = div(e(out.total[i]), div(sum,extd));
+    }
+
+    return out;
+}
+
+
+def main(private u64[28][28] train_examples, private u32 train_labels) -> (u64[26][26][FILTER_NUM], u64[13][13][FILTER_NUM], u64[NODE_NUM], u64[INPUT_LEN], u64[NODE_NUM]) {
+
+    //Relu_For_Out mut relu_for_out = Relu_For_Out{ total: [0; NODE_NUM], output: [0; NODE_NUM], input_flat: [0; INPUT_LEN] };
+    //Relu_Back_Out mut relu_back_out = Relu_Back_Out{output: [[[0; FILTER_NUM]; 13]; 13], weights: [[0; NODE_NUM]; INPUT_LEN], biases: [0; NODE_NUM] };
+
+    u64[FILTER_NUM][3][3] mut conv_kernel = [[[500000;3];3];FILTER_NUM];//扩大
+    u64[26][26][FILTER_NUM] mut conv_output = [[[0; FILTER_NUM]; 26]; 26];
+    u64[INPUT_LEN][NODE_NUM] weights = [[500000; NODE_NUM]; INPUT_LEN];
+    u64[NODE_NUM] biases = [500000; NODE_NUM];
+    //Relu_Back_Out mut relu_back_out = Relu_Back_Out{output: [[[0; FILTER_NUM]; 13]; 13],  };
+
+
+        //向前传播
+    conv_output = conv_forward(train_examples, conv_kernel);
+    u64[13][13][FILTER_NUM] mut pool_output  = pool_forward(conv_output);
+    Relu_For_Out mut relu_for_out = relu_forward(weights, biases, pool_output);
+
+    u64 mut loss_sum = log1(relu_for_out.output[train_labels])*(-1);
+
+    u64[NODE_NUM] mut d_L_d_out = [0;NODE_NUM];
+    d_L_d_out[train_labels] = div(extd*extd, relu_for_out.output[train_labels])*(-1);
+
+        //pool_output = pool_forward(conv_output);
+    return (conv_output, pool_output, relu_for_out.total, relu_for_out.input_flat, d_L_d_out);
+        
+}

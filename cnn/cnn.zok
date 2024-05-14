@@ -1,0 +1,323 @@
+//TODO:===扩大10^6倍===  图像归一化后扩大了10^8  
+//DDONE:反向传播时，conv、pool、softmax可以分别考虑用struct来保存last_input
+//DDONE:不能用softmax，由于扩大倍数，在指数计算时数值太大
+//DDONE:考虑改用relu
+//TODO:对负数处理，包括除法
+//DDONE:扩大后在计算时要缩小
+//TODO:给weight和bias设置初始值
+
+const u32 N_TEST_EXAMPLES = 10;
+const u32 N_IMAGE = 28;
+const u64 EXTD_INPUT = 1000000;//10^6
+const u64 EXTD_KERNEL = 1000000;//10^6
+//const u64 EXTD_GRAD = 10000;//10^6
+const u64 EXTD_LOSS = 1000000;//10^6
+const u64 EXTD_WEIGHT = 1000000;//10^6
+const u64 extd = 1000000;
+const u32 NODE_NUM = 10;//输出节点个数，即预测的可能结果数量
+const u32 FILTER_NUM = 2;
+const u32 INPUT_LEN = 13*13*FILTER_NUM;//13*13*FILTER_NUM
+const u32 KER_SIZE = 3;
+const u32 POOL_SIZE = 2;
+//const u64[2][3][3] conv_kernel = [[[50, 50, 50], [50, 50, 50], [50, 50, 50]], [[50, 50, 50], [50, 50, 50], [50, 50, 50]]];//扩大
+
+struct Relu_For_Out {
+    u64[NODE_NUM] total;
+    u64[NODE_NUM] output;
+    u64[INPUT_LEN] input_flat;
+}
+
+struct Relu_Back_Out {
+    u64[13][13][FILTER_NUM] output;
+    u64[INPUT_LEN][NODE_NUM] weights;
+    u64[NODE_NUM] biases;
+}
+
+def div(u64 a, u64 b) -> u64{
+    u64 minus = 9223372036854775807;
+    u64 result = if(a<=minus && b<=minus) {a/b}\
+                else { if(a>minus && b>minus) {(a*-1)/(b*-1)}\
+                else {if(a>minus && b<=minus) {((a*-1)/b)*-1}\
+                else { if(a<=minus && b>minus) {(a/(b*-1))*-1}\
+                else {0} } } };
+    return result;
+}
+
+//conv 3*3
+def conv_forward(u64[28][28] input, u64[FILTER_NUM][3][3] conv_kernel) -> u64[26][26][FILTER_NUM] {
+    u64[26][26][FILTER_NUM] mut output = [[[0; FILTER_NUM]; 26]; 26];
+    for u32 i in 0..26 {
+        for u32 j in 0..26 {
+            for u32 f in 0..FILTER_NUM {//遍历卷积层数
+                u64 mut sum = 0;
+                for u32 row in i..(i+3) {
+                    for u32 line in j..(j+3) {
+                        sum = sum + input[row][line] * conv_kernel[f][row - i][line - j];//kernel扩大了 input也扩大了
+                    }
+                }
+                output[i][j][f] = sum / EXTD_KERNEL;
+            }
+        }
+    }
+
+    return output;
+}
+
+//TODO: conv的反向传播
+def conv_backprop(u64[26][26][FILTER_NUM] d_L_d_out, u64[FILTER_NUM][3][3] conv_kernel, u64[28][28] input, u64 lr) -> u64[FILTER_NUM][3][3] {
+    u64[FILTER_NUM][3][3] mut d_L_d_filter = [[[0; 3]; 3]; FILTER_NUM];
+
+    for u32 i in 0..(28-2) {
+        for u32 j in 0..(28-2) {
+            for u32 f in 0..FILTER_NUM {
+                for u32 i2 in 0..3 {
+                    for u32 j2 in 0..3 {
+                        d_L_d_filter[f][i2][j2] = div(d_L_d_filter[f][i2][j2] + d_L_d_out[i][j][f] * input[i+i2][j+j2], EXTD_LOSS);//只有d_L_d_out扩大了
+                    }
+                }
+            }
+        }
+    }
+    u64[FILTER_NUM][3][3] mut now_kernel = [[[0; 3]; 3]; FILTER_NUM];
+    for u32 i in 0..FILTER_NUM {
+        for u32 j in 0..3 {
+            for u32 k in 0..3 {
+                now_kernel[i][j][k] = div(conv_kernel[i][j][k] - d_L_d_filter[i][j][k], lr);//lr是整数，需要除法
+            }
+        }
+    }
+    return now_kernel;
+}
+
+
+
+//Pool 2*2
+def pool_forward(u64[26][26][FILTER_NUM] input) -> u64[13][13][FILTER_NUM] {
+    u64 h = 13;
+    u64 w = 13;
+    u64[13][13][FILTER_NUM] mut output = [[[0; FILTER_NUM]; 13]; 13];
+    for u32 i in 0..13 { 
+        for u32 j in 0..13 {
+            for u32 f in 0..FILTER_NUM {
+                u64 mut max = 0;
+                for u32 row in (i*2)..(i*2+2) {
+                    for u32 line in (j*2)..(j*2+2) {
+                        max = if (max < input[row][line][f]) { input[row][line][f] } else { max };
+                    }
+                }
+                output[i][j][f] = max;
+            }
+        }
+    }
+    return output;
+}
+
+//TODO: pool的反向传播
+def pool_backprop(u64[13][13][FILTER_NUM] d_L_d_out, u64[26][26][FILTER_NUM] input,  u64[13][13][FILTER_NUM] output) -> u64[26][26][FILTER_NUM] {
+    u64[26][26][FILTER_NUM] mut d_L_d_input = [[[0; FILTER_NUM]; 26]; 26];
+
+    u64[FILTER_NUM] mut max = [0; FILTER_NUM];
+    for u32 i in 0..13 {
+        for u32 j in 0..13 {
+            max = output[i][j];
+            //对图像的2*2切片遍历
+            for u32 i2 in 0..2 {
+                for u32 j2 in 0..2 {
+                    for u32 f2 in 0..FILTER_NUM {
+                        d_L_d_input[i*2+i2][j*2+j2][f2] = if(max[f2] == input[i*2+i2][j*2+j2][f2]) {d_L_d_out[i][j][f2]} else {0};
+                    }
+                }
+            }
+        }
+    }
+
+    return d_L_d_input;
+}
+
+
+def e(u64 x) -> u64{
+    u64 ex = extd + x + div(div(x*x,extd),2) + div(div(((div(x*x,extd))*x),extd),6);
+    return ex;
+}
+
+// //relu
+
+// def relu(u64[NODE_NUM] x) -> u64[NODE_NUM] {
+//     u64[NODE_NUM] mut output = [0; NODE_NUM];
+//     for u32 i in 0..NODE_NUM {
+//         output[i] = if (x[i] > 0) {output[i]} else {0};
+//     }
+//     return output;
+// }
+
+//weight和bias在main函数中，所以可作为函数的输入
+//return: total, output, input_flat
+def relu_forward(u64[INPUT_LEN][NODE_NUM] weights, u64[NODE_NUM] biases, u64[13][13][FILTER_NUM] input) -> Relu_For_Out {
+    
+    Relu_For_Out mut out = Relu_For_Out{ total: [0; NODE_NUM], output: [0; NODE_NUM], input_flat: [0; INPUT_LEN] };
+    //u64[NODE_NUM] mut output = [0; NODE_NUM];
+    //flatten
+    //u64[INPUT_LEN] mut input_flat = [0; INPUT_LEN];
+    u32 mut index = 0;
+    for u32 i in 0..13 {
+        for u32 j in 0..13 {
+            for u32 k in 0..FILTER_NUM {
+                out.input_flat[index] = input[i][j][k];
+                index = index + 1;
+            }
+        }
+    }
+    //(1*INPUT_LEN) 点乘 (INPUT_LEN*NODE_NUM) + biases
+    //u64[NODE_NUM] mut total = [0; NODE_NUM];
+    for u32 i in 0..NODE_NUM { 
+        for u32 j in 0..INPUT_LEN {
+            out.total[i] = out.total[i] + div(out.input_flat[j] * weights[j][i], EXTD_WEIGHT);
+        }
+        out.total[i] = out.total[i] + biases[i];
+    }
+    u64 mut sum =0;
+    for u32 i in 0..NODE_NUM{
+        sum = sum + e(out.total[i]);
+    }
+    for u32 i in 0..NODE_NUM{
+        out.output[i] = div(e(out.total[i]), div(sum,extd));
+    }
+
+    return out;
+}
+
+
+def log1(u64 x)->u64{
+    u64 logx= 3*x-11*extd/6-div(div(3*x*x,extd),2) +  div(div((div(x*x,extd)*x),extd),3);
+    return logx;
+
+}
+
+//d_out_d_t忽略，d_L_d_out扩大，d_t_d_w扩大，d_t_d_out扩大
+//如果直接相乘，dL_dw和dL_dinput扩大两次，所以要除以一次extd
+//返回dL_dinput，weight和bias，后两者用于更新weights和biases
+def relu_backprop(u64[NODE_NUM] d_L_d_out, u64[NODE_NUM] total,u64[INPUT_LEN][NODE_NUM] weights,\
+                u64[NODE_NUM] biases, u64[INPUT_LEN] input_flat, u64 lr) -> Relu_Back_Out {
+    Relu_Back_Out mut out = Relu_Back_Out{output: [[[0; FILTER_NUM]; 13]; 13], weights: weights, biases: biases };
+    u64[NODE_NUM] mut total_exp = [0;NODE_NUM];
+    //选出唯一一个不为0的grad
+    //u64 mut grad = 0;
+    u32 mut idx = 0;
+    for u32 i in 0..NODE_NUM {
+        //grad = if(d_L_d_out[i] != 0) {d_L_d_out[i]} else {grad};
+        idx = if(d_L_d_out[i] != 0) {i} else {idx};
+    }
+    //grad = e(grad);
+
+
+    //链式法则计算
+    u64[NODE_NUM] mut d_out_d_t = [0; NODE_NUM];
+    u64 mut total_sum=0;
+    for u32 i in 0..NODE_NUM{
+        total_exp[i] = e(total[i]);
+        total_sum = total_sum + total_exp[i];
+    }
+
+    for u32 i in 0..NODE_NUM{
+        d_out_d_t[i] = div(div(total_exp[i],div(total_sum,extd))*total_exp[idx],total_sum)*(-1);
+    }
+    d_out_d_t[idx] = div(div(total_sum-total_exp[idx],div(total_sum,extd))*total_exp[idx],total_sum);
+
+
+    u64[INPUT_LEN]  d_t_d_w = input_flat;
+    u64[INPUT_LEN][NODE_NUM]  d_t_d_input = weights;
+    u64  d_t_d_b = 1;
+    u64[NODE_NUM] mut d_L_d_t = [0; NODE_NUM];
+    //grad是一个数，代表了某个下标的d_L_d_t的值，d_out_d_t为一个数组，表示不同类的梯度值
+            //为什么将某个下标的值和其他所有下标的相乘？
+    for u32 i in 0..NODE_NUM {
+        d_L_d_t[i] = div(d_L_d_out[idx]*d_out_d_t[i],extd);
+    }
+    //计算其他的
+    u64[INPUT_LEN][NODE_NUM] mut d_L_d_w = [[0; NODE_NUM]; INPUT_LEN];
+    u64[NODE_NUM] mut d_L_d_b = [0; NODE_NUM];
+    u64[INPUT_LEN] mut d_L_d_input = [0; INPUT_LEN];
+
+    for u32 i in 0..INPUT_LEN {
+        for u32 j in 0..NODE_NUM {
+            d_L_d_w[i][j] = div(d_t_d_w[i] * d_L_d_t[j], EXTD_LOSS);//防止两次扩大
+        }
+    }
+    d_L_d_b = d_L_d_t;
+    for u32 i in 0..INPUT_LEN {
+        for u32 j in 0..NODE_NUM {
+            d_L_d_input[i] = d_L_d_input[i] + div(d_t_d_input[i][j] * d_L_d_t[j], EXTD_LOSS);//防止两次扩大
+        }
+    }
+    //u64[INPUT_LEN][NODE_NUM] mut now_weights = weights;
+    //u64[NODE_NUM] mut now_biases = biases;
+    for u32 i in 0..INPUT_LEN {
+        for u32 j in 0..NODE_NUM {
+            out.weights[i][j] = div(out.weights[i][j] -  d_L_d_w[i][j], lr);//lr是整数，需要除法
+        }
+    }
+    for u32 i in 0..NODE_NUM {
+        out.biases[i] = div(out.biases[i] - d_L_d_b[i], lr);//lr是整数，需要除法
+    }
+
+    //reshape
+    u32 mut index = 0;
+    //u64[13][13][FILTER_NUM] mut output = [[[0; FILTER_NUM]; 13]; 13];
+    for u32 i in 0..13{
+        for u32 j in 0..13 {
+            for u32 k in 0..FILTER_NUM {
+                out.output[i][j][k] = d_L_d_input[index];
+                index = index + 1;
+            }
+        }
+    }
+
+    return out;//out.output.flatten() equal d_L_d_input
+}
+
+
+def main(private u64[28][28] train_examples, private u32 train_labels) -> (u64[2][3][3], u64[INPUT_LEN][NODE_NUM], u64[NODE_NUM]) {
+
+    Relu_For_Out mut relu_for_out = Relu_For_Out{ total: [0; NODE_NUM], output: [0; NODE_NUM], input_flat: [0; INPUT_LEN] };
+    Relu_Back_Out mut relu_back_out = Relu_Back_Out{output: [[[0; FILTER_NUM]; 13]; 13], weights: [[0; NODE_NUM]; INPUT_LEN], biases: [0; NODE_NUM] };
+
+    u64[FILTER_NUM][3][3] mut conv_kernel = [[[50, 50, 50], [50, 50, 50], [50, 50, 50]], [[50, 50, 50], [50, 50, 50], [50, 50, 50]]];//扩大
+    u64[26][26][FILTER_NUM] mut conv_output = [[[0; FILTER_NUM]; 26]; 26];
+    u64[13][13][FILTER_NUM] mut pool_output = [[[0; FILTER_NUM]; 13]; 13];
+    //u64[INPUT_LEN][NODE_NUM] mut weights = [[0; NODE_NUM]; INPUT_LEN];
+    //u64[NODE_NUM]  mut biases = [0; NODE_NUM];
+    //u64[NODE_NUM] mut total = [0; NODE_NUM];
+    //u64[NODE_NUM] mut output = [0; NODE_NUM];
+    u64[NODE_NUM] mut loss_cal = [0; NODE_NUM];//用于保存EXTD_LOSS倍归一化后的预测结果
+    //u64[INPUT_LEN] mut input_flat = [0; INPUT_LEN];
+    u64 mut l2 = 0;
+    u64 mut loss_sum = 0;
+    u64[NODE_NUM] mut d_L_d_out = [0; NODE_NUM];
+    u64[13][13][FILTER_NUM] mut d_L_d_input = [[[0; FILTER_NUM]; 13]; 13];
+    u64 lr = 1000;//10^3
+    u64[26][26][FILTER_NUM] mut pool_d_L_d_input = [[[0; FILTER_NUM]; 26]; 26];
+
+
+        //向前传播
+    conv_output = conv_forward(train_examples, conv_kernel);
+    pool_output = pool_forward(conv_output);
+    relu_for_out = relu_forward(relu_back_out.weights, relu_back_out.biases, pool_output);//函数多个返回值存在问题
+        //(total, output, input_flat) = relu_forward(weights, biases, pool_output);//函数多个返回值存在问题
+
+    loss_sum = log1(relu_for_out.output[train_labels])*(-1);
+
+    d_L_d_out[train_labels] = div(extd*extd, relu_for_out.output[train_labels])*(-1);
+        //反向传播
+        //先计算损失函数的梯度
+        // for u32 i in 0..NODE_NUM {
+        //     d_L_d_out[i] = if (i==train_labels[index]) {2*(EXTD_LOSS - loss_cal[i])} else {2*loss_cal[i]};//还需要调整
+        // }
+
+    relu_back_out = relu_backprop(d_L_d_out, relu_for_out.total, relu_back_out.weights, relu_back_out.biases, relu_for_out.input_flat, lr);
+        //relu_d_L_d_out, weights, biases = relu_backprop(d_L_d_out, relu_for_out.total, weights, biases, relu_for_out.input_flat, lr);
+    pool_d_L_d_input = pool_backprop(relu_back_out.output, conv_output, pool_output);
+    conv_kernel = conv_backprop(pool_d_L_d_input, conv_kernel, train_examples, lr);
+
+
+    return (conv_kernel, relu_back_out.weights, relu_back_out.biases);
+}
