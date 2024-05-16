@@ -46,6 +46,15 @@
 3. interact with contract
 
    1. Start your node using `substrate-contracts-node --log info,runtime::contracts=debug 2>&1`
-   2. `cargo contract instantiate --constructor new --args [0,0,0,0,0] [2,2,2,2,2] --suri //Alice --salt $(date +%s) -x` to upload and instantiate in the root of project.
-   3. you can update data using `cargo contract call --contract $INSTANTIATED_CONTRACT_ADDRESS --message up_data --args 0 [2,2,2,2,2] --suri //Alice -x`
-   4. calculate the addition of the two vectors: `cargo contract call --contract $INSTANTIATED_CONTRACT_ADDRESS --message cal --suri //Alice` . you can add `-x` to storage this call on the blockchain.
+      
+   2. upload and instantiate in the root of project
+
+   ```bash
+   ./deploy.sh
+   ```
+
+   3. aggregate global model through smart contract.
+
+   ```bash
+   ./aggregation.sh $CONTRACT_INDEX
+   ```
